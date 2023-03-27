@@ -20,7 +20,7 @@
 #define WEAPON_COUNT_L2 18
 #define WEAPON_COUNT_L1 7
 
-static char g_sExplosionProps[][] = { "dmg", "scaleff", "radius", "stun_special", "stun_witch", "stun_tank" };
+static char g_sExplosionProps[][] = { "dmg", "scaleff", "radius", "stun_special", "stun_witch", "stun_tank", "enabled" };
 
 enum struct WeaponSettings
 {
@@ -33,6 +33,14 @@ enum struct WeaponSettings
 	bool Enabled;
 }
 
+// Stores the behaviour of client shots
+enum ClientExplosion
+{
+	Mode_Block,	// Clients can't cause explosions
+	Mode_Auto,	// Clients will cause explosions with weapons allowed in the cfg file
+	Mode_Force	// Clients will cause explosions with any gun
+};
+
 ConVar g_cvAllow;
 ConVar g_cvGameModes;
 ConVar g_cvCurrGameMode;
@@ -40,6 +48,9 @@ ConVar g_cvCfgFile;
 
 bool g_bPluginOn;
 bool g_bL4D2;
+
+ClientExplosion g_ceClientMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
+bool g_bClientAllow[MAXPLAYERS + 1] = {true, ... };	// Blocks shots of client, used to prevent multiple explosions in 1 shot due to piercing
 
 WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
 
@@ -89,6 +100,18 @@ public void OnConfigsExecuted()
 {
 	SwitchPlugin();
 	LoadConfig();
+}
+
+public void OnClientConnected(int client)
+{
+	g_ceClientMode[client] = Mode_Auto;
+	g_bClientAllow[client] = true;
+}
+
+public void OnClientDisconnect(int client)
+{
+	g_ceClientMode[client] = Mode_Auto;
+	g_bClientAllow[client] = true;
 }
 
 void CVarChange_Enable(ConVar convar, const char[] oldValue, const char[] newValue)
@@ -314,8 +337,94 @@ bool ReadCfgFile(const char[] fileName)
 	return true;
 }
 
-
 Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 {
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	float vPos[3];
+	vPos[0] = event.GetFloat("x");
+	vPos[1] = event.GetFloat("y");
+	vPos[2] = event.GetFloat("z");
+
+	if( !g_bClientAllow[client] || IsFakeClient(client) )
+		return Plugin_Continue;
+
+	if( g_ceClientMode[client] == Mode_Block )
+		return Plugin_Continue;
+	
+	char sWeapon[32];
+	if( GetEntProp(client, Prop_Send, "m_usingMountedWeapon") == 1 )
+		sWeapon = "minigun";
+
+	else GetClientWeapon(client, sWeapon, sizeof(sWeapon));
+	#if DEBUG
+	PrintToServer("%sShot produced, weapon: %s", SERVER_TAG, sWeapon);
+	#endif
+
+	int index;
+	if( !g_smWeapons.GetValue(sWeapon, index) )
+	{
+		#if DEBUG
+		PrintToServer("%sFailed getting StringMap value!", SERVER_TAG);
+		#endif
+		return Plugin_Continue;
+	}
+	#if DEBUG
+	PrintToServer("%sg_esWeaponSettings[index].Enabled: %b", SERVER_TAG, g_esWeaponSettings[index].Enabled);
+	PrintToServer("%sg_ceClientMode[client] == Mode_Force: %b", SERVER_TAG, g_ceClientMode[client] == Mode_Force);
+	#endif
+
+	if( g_esWeaponSettings[index].Enabled || g_ceClientMode[client] == Mode_Force )
+		CreateExplosion(client, vPos, g_esWeaponSettings[index].Damage, g_esWeaponSettings[index].Radius);
+
 	return Plugin_Continue;
+}
+
+void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
+{
+	// Convert floats into strings
+	char sDmg[8], sRadius[8];
+	Format(sDmg, sizeof(sDmg), "%.4f", dmg);
+	Format(sRadius, sizeof(sRadius), "%.4f", radius);
+
+	int entity = CreateEntityByName("env_explosion");
+	#if DEBUG
+	PrintToServer("%sCreating an explosion for client %d",SERVER_TAG, client);
+	PrintToServer("%sEntity index: %d", SERVER_TAG, entity);
+	PrintToServer("%sVector: %.2f, %.2f, %.2f", SERVER_TAG, vPos[0], vPos[1], vPos[2]);
+	#endif
+
+	TeleportEntity(entity, vPos, NULL_VECTOR, NULL_VECTOR);
+	DispatchKeyValue(entity, "iMagnitude", sDmg);
+	if( radius > 0.0 ) DispatchKeyValue(entity, "iRadiusOverride", sRadius);
+	DispatchKeyValue(entity, "rendermode", "5");
+	DispatchKeyValue(entity, "spawnflags", "128");	// Random orientation
+	DispatchKeyValue(entity, "fireballsprite", "sprites/zerogxplode.spr");
+	SetEntPropEnt(entity, Prop_Data, "m_hInflictor", client);	// Make the player who created the env_explosion the owner of it
+	SetEntPropEnt(entity, Prop_Send, "m_hOwnerEntity", client);
+	
+	DispatchSpawn(entity);
+	
+	SetVariantString("OnUser1 !self:Explode::0.01:1)");	// Add a delay to allow explosion effect to be visible
+	AcceptEntityInput(entity, "Addoutput");
+	AcceptEntityInput(entity, "FireUser1");
+	// env_explosion is autodeleted after 0.3s while spawnflag repeteable is not added
+	
+	g_bClientAllow[client] = false;
+	RequestFrame(AllowShot_Frame, client);
+	
+	// Play an explosion sound
+	switch( GetRandomInt(1,3) )
+	{
+		case 1: EmitAmbientSound(SND_EXPL1, vPos);
+		case 2: EmitAmbientSound(SND_EXPL2, vPos);
+		case 3: EmitAmbientSound(SND_EXPL2, vPos);
+	}
+}
+
+void AllowShot_Frame(int client)
+{
+	g_bClientAllow[client] = true;
+	#if DEBUG
+	PrintToServer("%sEnabling client %d explosive shots.",SERVER_TAG, client);
+	#endif
 }
