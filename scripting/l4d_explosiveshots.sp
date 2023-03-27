@@ -2,17 +2,36 @@
 #include <sdkhooks>
 #include <sdktools>
 #include <sourcemod>
+#include <profiler>
 #pragma newdecls required
 #pragma semicolon 1
 
 #define PLUGIN_VERSION "0.1-SNAPSHOT"
 #define FCVAR_FLAGS FCVAR_NOTIFY
+#define DEBUG 1
 
 #define SND_EXPL1 "weapons/flaregun/gunfire/flaregun_explode_1.wav"
 #define SND_EXPL2 "weapons/flaregun/gunfire/flaregun_fire_1.wav"
 #define SND_EXPL3 "animation/plane_engine_explode.wav"
 
+#define SERVER_TAG "[ExplosiveShots] "
 #define DEFAULT_CFG "data/l4d_explosiveshots.cfg"
+
+#define WEAPON_COUNT_L2 18
+#define WEAPON_COUNT_L1 7
+
+static char g_sExplosionProps[][] = { "dmg", "scaleff", "radius", "stun_special", "stun_witch", "stun_tank" };
+
+enum struct WeaponSettings
+{
+	float Damage;
+	float FriendDamage;
+	float Radius;
+	float StunSpecial;
+	float StunWitch;
+	float StunTank;
+	bool Enabled;
+}
 
 ConVar g_cvAllow;
 ConVar g_cvGameModes;
@@ -21,6 +40,10 @@ ConVar g_cvCfgFile;
 
 bool g_bPluginOn;
 bool g_bL4D2;
+
+WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
+
+StringMap g_smWeapons;
 
 public Plugin myinfo =
 {
@@ -51,7 +74,6 @@ public void OnPluginStart()
 	CreateConVar("l4d_explosiveshots_version", PLUGIN_VERSION, "Plugin version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
 
 	g_cvAllow = CreateConVar("l4d_expshots_enable", "1", "0 = Plugin off. 1 = Plugin on.", FCVAR_FLAGS, true, 0.0, true, 1.0);
-	g_cvGameModes = CreateConVar("l4d_expshots_gamemodes", "","Enable the plugin in these gamemodes, separated by spaces. (Empty = all).", FCVAR_FLAGS);
 	g_cvGameModes = CreateConVar("l4d_expshots_gamemodes", "","Enable the plugin in these gamemodes, separated by spaces. (Empty = all).", FCVAR_FLAGS);
 	g_cvCfgFile = CreateConVar("l4d_expshots_configfile", DEFAULT_CFG, "Name of the config file to load", FCVAR_FLAGS);
 
@@ -86,19 +108,24 @@ void SwitchPlugin()
 	{
 		g_bPluginOn = true;
 		HookEvent("bullet_impact", Event_Bullet_Impact);
-		PrintToServer("Plugin On");
 	}
 	if( g_bPluginOn && (!bAllow || !GetGameMode()) )
 	{
 		g_bPluginOn = false;
 		UnhookEvent("bullet_impact", Event_Bullet_Impact);
-		PrintToServer("Plugin Off");
 	}
 }
 
 void LoadConfig()
 {
+	char sFileName[64];
+	g_cvCfgFile.GetString(sFileName, sizeof(sFileName));
+	#if DEBUG
+	PrintToServer("%sReading configs for \"%s\".", SERVER_TAG, sFileName);
+	#endif
 
+	if( !ReadCfgFile(sFileName) )
+		SetFailState("Errors on config files.");
 }
 
 bool GetGameMode()
@@ -125,6 +152,168 @@ bool GetGameMode()
 	}
 	return false;
 }
+
+/* ============================================================================= *
+ *                                  FileReader                                   *
+ * ============================================================================= */
+/**
+ * Attempts to read the provided config file, if the file is custom and fails to
+ * read, it will open the default one.
+ * 
+ * @param fileName     Relative path of the cfg file
+ * @return             true on success false on fail
+ */
+bool ReadCfgFile(const char[] fileName)
+{
+	// Build the file path
+	char sPath[PLATFORM_MAX_PATH];
+	BuildPath(Path_SM, sPath, sizeof(sPath), fileName);
+	bool bDefault = ( strncmp(fileName, DEFAULT_CFG, 27) == 0 ) ? true : false; // Check if is the default file
+
+	if( !FileExists(sPath) )	// Throw warning/error if file doesn't exist.
+	{
+		if( !bDefault )
+		{
+			PrintToServer("%sWarning: Missing config file \"%s\", attempting default file.", SERVER_TAG, fileName);
+			return ReadCfgFile(DEFAULT_CFG);	// Attempt to read default file
+		}
+		PrintToServer("%sError: Missing default config file, plugin disabled.", SERVER_TAG);
+		return false;	// Crash plugin
+	}
+
+	KeyValues hKV = new KeyValues("explosions");
+	if( !hKV.ImportFromFile(sPath) )	// Throw warning/error if file can't be opened
+	{
+		if( !bDefault )
+		{
+			PrintToServer("%sWarning: Can't read \"%s\", attempting default file.", SERVER_TAG, fileName);
+			return ReadCfgFile(DEFAULT_CFG);		
+		}
+		PrintToServer("%sError: Can't read default config file, plugin disabled.", SERVER_TAG);
+		return false;	
+	}
+	
+	#if DEBUG
+	PrintToServer("%sReading KeyValues file. Starting profiling.", SERVER_TAG);
+	Profiler pro = new Profiler();
+	pro.Start();
+	#endif
+	// Import the data into the defined ES and link each one with the StringMap
+	delete g_smWeapons;
+	g_smWeapons = CreateTrie();
+	char sMainKey[12];
+	sMainKey = g_bL4D2 ? "Left4Dead2" : "Left4Dead";
+
+	if( !hKV.JumpToKey(sMainKey) )
+	{
+		if( !bDefault )
+		{
+			PrintToServer("%sWarning: Can't read \"%s\", attempting default file.", SERVER_TAG, fileName);
+			return ReadCfgFile(DEFAULT_CFG);		
+		}
+		PrintToServer("%sError: Can't read default config file, plugin disabled.", SERVER_TAG);
+
+		#if DEBUG
+		delete pro;
+		#endif
+		return false;
+	}
+	hKV.GotoFirstSubKey();
+	int count = 0;
+	int max = g_bL4D2 ? WEAPON_COUNT_L2 : WEAPON_COUNT_L1;
+	do
+	{
+		if( count >= max )	// This prevents going out of bounds of the ES array
+		{
+			count = 0;
+			break;
+		}
+
+		char sName[32];
+		hKV.GetSectionName(sName, sizeof(sName));
+		g_smWeapons.SetValue(sName, count);
+		#if DEBUG
+		PrintToServer("%sKey %s", SERVER_TAG, sName);
+		#endif
+
+		for( int i = 0; i < sizeof(g_sExplosionProps); i++ )
+		{
+			if( !hKV.JumpToKey(g_sExplosionProps[i]) )
+			{
+				#if DEBUG
+				delete pro;
+				#endif
+				delete hKV;
+
+				if( !bDefault )
+				{
+					PrintToServer("%Warning: Failed to read \"%s\" value from \"%s\". Reading default file.", SERVER_TAG, g_sExplosionProps[i], sName);
+					return ReadCfgFile(DEFAULT_CFG); 
+				}
+				PrintToServer("%sError: Failed to read \"%s\" value from \"%s\". Plugin disabled.", SERVER_TAG, g_sExplosionProps[i], sName); 
+				delete hKV;
+				return false;
+			}
+
+			switch( i )
+			{
+				case 0: g_esWeaponSettings[count].Damage = hKV.GetFloat(NULL_STRING);
+				case 1: g_esWeaponSettings[count].FriendDamage = hKV.GetFloat(NULL_STRING);
+				case 2: g_esWeaponSettings[count].Radius = hKV.GetFloat(NULL_STRING);
+				case 3: g_esWeaponSettings[count].StunSpecial = hKV.GetFloat(NULL_STRING);
+				case 4: g_esWeaponSettings[count].StunWitch = hKV.GetFloat(NULL_STRING);
+				case 5: g_esWeaponSettings[count].StunTank = hKV.GetFloat(NULL_STRING);
+				case 6: g_esWeaponSettings[count].Enabled = hKV.GetNum(NULL_STRING) == 1;
+			}
+
+			hKV.GoBack();
+		}
+		#if DEBUG
+		PrintToServer("g_esWeaponSettings[%d].Damage =  %.4f", count, g_esWeaponSettings[count].Damage);
+		PrintToServer("g_esWeaponSettings[%d].FriendDamage =  %.4f", count, g_esWeaponSettings[count].FriendDamage);
+		PrintToServer("g_esWeaponSettings[%d].Radius =  %.4f", count, g_esWeaponSettings[count].Radius);
+		PrintToServer("g_esWeaponSettings[%d].StunSpecial =  %.4f", count, g_esWeaponSettings[count].StunSpecial);
+		PrintToServer("g_esWeaponSettings[%d].StunWitch =  %.4f", count, g_esWeaponSettings[count].StunWitch);
+		PrintToServer("g_esWeaponSettings[%d].StunTank =  %.4f", count, g_esWeaponSettings[count].StunTank);
+		PrintToServer("g_esWeaponSettings[%d].Enabled =  %b", count, g_esWeaponSettings[count].Enabled);
+		#endif
+		count++;
+	}
+	while( hKV.GotoNextKey(false) );
+
+	if( count != max )
+	{
+		if( !bDefault )
+		{
+			PrintToServer("%sWarning: incorrect amount of weapon settigns provided. Opening default file.", SERVER_TAG);
+			return ReadCfgFile(DEFAULT_CFG);
+		}
+		PrintToServer("%Error: incorrect amount of weapon settigns provided in default file. Plugin disabled.", SERVER_TAG);
+		delete hKV;
+		return false;
+	}
+
+	#if DEBUG
+	PrintToServer("Key values read ended.");
+	pro.Stop();
+	PrintToServer("Profile ended, time: %.4f", pro.Time);
+	delete pro;
+
+	StringMapSnapshot sms = g_smWeapons.Snapshot();
+	for( int i = 0; i < sms.Length; i++ )
+	{
+		char sKey[32];
+		int value;
+		sms.GetKey(i, sKey, sizeof(sKey));
+		g_smWeapons.GetValue(sKey, value);
+		PrintToServer("Key: %s; Value:%d", sKey, value);
+	}
+	#endif
+
+	delete hKV;
+	return true;
+}
+
 
 Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 {
