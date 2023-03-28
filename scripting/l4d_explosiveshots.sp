@@ -1,4 +1,4 @@
-#define DEBUG 1
+#define DEBUG 0
 
 #include <sdkhooks>
 #include <sdktools>
@@ -53,12 +53,11 @@ WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
 
 StringMap g_smWeapons;
 
-
 public Plugin myinfo =
 {
 	name = "[L4D & L4D2] Explosive Shots",
 	author = "Eärendil",
-	description = "",
+	description = "Allows weapons to create explosions where bullet impacts.",
 	version = PLUGIN_VERSION,
 	url = "https://github.com//l4d_explosiveshots"
 };
@@ -108,12 +107,15 @@ public void OnClientPutInServer(int client)
 {
 	g_iMode[client] = Mode_Auto;
 	g_bClientAllow[client] = true;
-
-	SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
+	if( g_bPluginOn )
+		SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 }
 
 public void OnEntityCreated(int entity, const char[] classname)
 {
+	if( !g_bPluginOn )
+		return;
+
 	if( strncmp(classname, "witch", 5) == 0 )
 		SDKHook(entity, SDKHook_OnTakeDamage, OnTakeDamage_Witch);
 }
@@ -149,8 +151,10 @@ void SwitchPlugin()
 
 		for( int i = 1; i <= MaxClients; i++ )
 		{
+			g_iMode[i] = Mode_Auto;
 			if( IsClientInGame(i) )
 				SDKHook(i, SDKHook_OnTakeDamage, OnTakeDamage);
+				
 		}
 
 		int witch;
@@ -419,7 +423,17 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 	PrintToServer("%sg_iMode[client] == Mode_Force: %b", SERVER_TAG, g_iMode[client] == Mode_Force);
 	#endif
 
-	if( (g_esWeaponSettings[index].Enabled || g_iMode[client] == Mode_Force) && ShouldCreateExplosion(g_esWeaponSettings[index].Chance) )
+	if( g_iMode[client] == Mode_Auto )
+	{
+		if( g_esWeaponSettings[index].Enabled && ShouldCreateExplosion(g_esWeaponSettings[index].Chance) )
+			CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
+	}
+	else if( g_iMode[client] == Mode_Enable )
+	{
+		if( ShouldCreateExplosion(g_esWeaponSettings[index].Chance) )
+			CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
+	}
+	else if( g_iMode[client] == Mode_Force )
 		CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
 
 	return Plugin_Continue;
@@ -650,8 +664,9 @@ int Native_SetExplosiveShots(Handle plugin, int numParams)
 	if( !IsPlayerAlive(client) )
 		ThrowNativeError(SP_ERROR_PARAM, "Client %d is dead.", client);
 	
-	if( mode >= Mode_Block || mode <= Mode_Force )
+	if( mode >= Mode_Block && mode <= Mode_Force )
 	{
+		PrintToServer("%d, %d", mode, Mode_Block);
 		g_iMode[client] = mode;
 		return true;
 	}
@@ -681,3 +696,4 @@ int Native_GetExplosiveShots(Handle plugin, int numParams)
 
 	return g_iMode[client];
 }
+
