@@ -1,14 +1,18 @@
+#define DEBUG 1
 
 #include <sdkhooks>
 #include <sdktools>
 #include <sourcemod>
+#include <l4d_explosiveshots>
+#include <survivorutilities>
+#if DEBUG
 #include <profiler>
+#endif
 #pragma newdecls required
 #pragma semicolon 1
 
 #define PLUGIN_VERSION "0.1-SNAPSHOT"
 #define FCVAR_FLAGS FCVAR_NOTIFY
-#define DEBUG 1
 
 #define SND_EXPL1 "weapons/flaregun/gunfire/flaregun_explode_1.wav"
 #define SND_EXPL2 "weapons/flaregun/gunfire/flaregun_fire_1.wav"
@@ -20,26 +24,18 @@
 #define WEAPON_COUNT_L2 18
 #define WEAPON_COUNT_L1 7
 
-static char g_sExplosionProps[][] = { "dmg", "scaleff", "radius", "stun_special", "stun_witch", "stun_tank", "enabled" };
+static char g_sExplosionProps[][] = { "dmg", "friend_dmg", "radius", "stun_special", "stun_witch", "stun_tank", "enabled" };
 
 enum struct WeaponSettings
 {
-	float Damage;
-	float FriendDamage;
+	float DamageZombies;
+	float DamageHumans;
 	float Radius;
 	float StunSpecial;
 	float StunWitch;
 	float StunTank;
 	bool Enabled;
 }
-
-// Stores the behaviour of client shots
-enum ClientExplosion
-{
-	Mode_Block,	// Clients can't cause explosions
-	Mode_Auto,	// Clients will cause explosions with weapons allowed in the cfg file
-	Mode_Force	// Clients will cause explosions with any gun
-};
 
 ConVar g_cvAllow;
 ConVar g_cvGameModes;
@@ -49,12 +45,13 @@ ConVar g_cvCfgFile;
 bool g_bPluginOn;
 bool g_bL4D2;
 
-ClientExplosion g_ceClientMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
+ExplosiveShotsMode g_esmMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
 bool g_bClientAllow[MAXPLAYERS + 1] = {true, ... };	// Blocks shots of client, used to prevent multiple explosions in 1 shot due to piercing
 
 WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
 
 StringMap g_smWeapons;
+
 
 public Plugin myinfo =
 {
@@ -77,6 +74,9 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 		return APLRes_SilentFailure;
 	}
 		
+	CreateNative("L4D_ExplosiveShots_Set", Native_SetExplosiveShots);
+	CreateNative("L4D_ExplosiveShots_Get", Native_GetExplosiveShots);
+
 	return APLRes_Success;
 }
 
@@ -96,21 +96,24 @@ public void OnPluginStart()
 	g_cvCfgFile.AddChangeHook(CVarChange_Config);
 }
 
+
 public void OnConfigsExecuted()
 {
 	SwitchPlugin();
 	LoadConfig();
 }
 
-public void OnClientConnected(int client)
+public void OnClientPutInServer(int client)
 {
-	g_ceClientMode[client] = Mode_Auto;
+	g_esmMode[client] = Mode_Auto;
 	g_bClientAllow[client] = true;
+
+	SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 }
 
 public void OnClientDisconnect(int client)
 {
-	g_ceClientMode[client] = Mode_Auto;
+	g_esmMode[client] = Mode_Auto;
 	g_bClientAllow[client] = true;
 }
 
@@ -131,11 +134,23 @@ void SwitchPlugin()
 	{
 		g_bPluginOn = true;
 		HookEvent("bullet_impact", Event_Bullet_Impact);
+
+		for( int i = 1; i <= MaxClients; i++ )
+		{
+			if( IsClientInGame(i) )
+				SDKHook(i, SDKHook_OnTakeDamage, OnTakeDamage);
+		}
 	}
 	if( g_bPluginOn && (!bAllow || !GetGameMode()) )
 	{
 		g_bPluginOn = false;
 		UnhookEvent("bullet_impact", Event_Bullet_Impact);
+
+		for( int i = 1; i <= MaxClients; i++ )
+		{
+			if( IsClientInGame(i) )
+				SDKUnhook(i, SDKHook_OnTakeDamage, OnTakeDamage);
+		}
 	}
 }
 
@@ -280,8 +295,8 @@ bool ReadCfgFile(const char[] fileName)
 
 			switch( i )
 			{
-				case 0: g_esWeaponSettings[count].Damage = hKV.GetFloat(NULL_STRING);
-				case 1: g_esWeaponSettings[count].FriendDamage = hKV.GetFloat(NULL_STRING);
+				case 0: g_esWeaponSettings[count].DamageZombies = hKV.GetFloat(NULL_STRING);
+				case 1: g_esWeaponSettings[count].DamageHumans = hKV.GetFloat(NULL_STRING);
 				case 2: g_esWeaponSettings[count].Radius = hKV.GetFloat(NULL_STRING);
 				case 3: g_esWeaponSettings[count].StunSpecial = hKV.GetFloat(NULL_STRING);
 				case 4: g_esWeaponSettings[count].StunWitch = hKV.GetFloat(NULL_STRING);
@@ -292,8 +307,8 @@ bool ReadCfgFile(const char[] fileName)
 			hKV.GoBack();
 		}
 		#if DEBUG
-		PrintToServer("g_esWeaponSettings[%d].Damage =  %.4f", count, g_esWeaponSettings[count].Damage);
-		PrintToServer("g_esWeaponSettings[%d].FriendDamage =  %.4f", count, g_esWeaponSettings[count].FriendDamage);
+		PrintToServer("g_esWeaponSettings[%d].DamageZombies =  %.4f", count, g_esWeaponSettings[count].DamageZombies);
+		PrintToServer("g_esWeaponSettings[%d].DamageHumans =  %.4f", count, g_esWeaponSettings[count].DamageHumans);
 		PrintToServer("g_esWeaponSettings[%d].Radius =  %.4f", count, g_esWeaponSettings[count].Radius);
 		PrintToServer("g_esWeaponSettings[%d].StunSpecial =  %.4f", count, g_esWeaponSettings[count].StunSpecial);
 		PrintToServer("g_esWeaponSettings[%d].StunWitch =  %.4f", count, g_esWeaponSettings[count].StunWitch);
@@ -339,18 +354,23 @@ bool ReadCfgFile(const char[] fileName)
 
 Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 {
+	// Get owner of the bullet
 	int client = GetClientOfUserId(event.GetInt("userid"));
+	//Get origin of the impact
 	float vPos[3];
 	vPos[0] = event.GetFloat("x");
 	vPos[1] = event.GetFloat("y");
 	vPos[2] = event.GetFloat("z");
 
+	// Ignore bots and prevent multiple explosions with one bullet
 	if( !g_bClientAllow[client] || IsFakeClient(client) )
 		return Plugin_Continue;
 
-	if( g_ceClientMode[client] == Mode_Block )
+	// Ignore players blocked
+	if( g_esmMode[client] == Mode_Block )
 		return Plugin_Continue;
 	
+	// Get the weapon name that caused the shot
 	char sWeapon[32];
 	if( GetEntProp(client, Prop_Send, "m_usingMountedWeapon") == 1 )
 		sWeapon = "minigun";
@@ -360,6 +380,7 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 	PrintToServer("%sShot produced, weapon: %s", SERVER_TAG, sWeapon);
 	#endif
 
+	// Get the index of the weapon properties using a StringMap
 	int index;
 	if( !g_smWeapons.GetValue(sWeapon, index) )
 	{
@@ -370,15 +391,24 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 	}
 	#if DEBUG
 	PrintToServer("%sg_esWeaponSettings[index].Enabled: %b", SERVER_TAG, g_esWeaponSettings[index].Enabled);
-	PrintToServer("%sg_ceClientMode[client] == Mode_Force: %b", SERVER_TAG, g_ceClientMode[client] == Mode_Force);
+	PrintToServer("%sg_esmMode[client] == Mode_Force: %b", SERVER_TAG, g_esmMode[client] == Mode_Force);
 	#endif
 
-	if( g_esWeaponSettings[index].Enabled || g_ceClientMode[client] == Mode_Force )
-		CreateExplosion(client, vPos, g_esWeaponSettings[index].Damage, g_esWeaponSettings[index].Radius);
+	if( g_esWeaponSettings[index].Enabled || g_esmMode[client] == Mode_Force )
+		CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
 
 	return Plugin_Continue;
 }
 
+/**
+ * Creates an env_explosion to destroy objects, push physics and hurt/knock players and zombies
+ * 
+ * @param client     Client who will cause the explosion
+ * @param vPos       Origin of the explosion
+ * @param dmg        Max damage of the explosion
+ * @param radius     Max radius of the explosion
+ * @noreturn
+ */
 void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
 {
 	// Convert floats into strings
@@ -427,4 +457,124 @@ void AllowShot_Frame(int client)
 	#if DEBUG
 	PrintToServer("%sEnabling client %d explosive shots.",SERVER_TAG, client);
 	#endif
+}
+
+Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype, int &weapon, float damageForce[3], float damagePosition[3])
+{
+	// Ignore non-explosion damage and dmg caused by weapons
+	if( damagetype != 64 || weapon != -1 )
+		return Plugin_Continue;
+
+	// Ignore damage from entities/wrold or non-survivors
+	if( !IsValidClient(attacker) || GetClientTeam(attacker) != 2 )
+		return Plugin_Continue;
+		
+	if( GetClientTeam(victim) == 3 ) // Zombie vitim of explosive shot
+	{
+		if( BlockStun(attacker, victim) )
+		{
+			damagetype = 0;	// Set Damagetype to generic to stop stunning
+			return Plugin_Changed;
+		}
+		return Plugin_Continue;
+	}
+	// Past this line only other option is a survivor
+	if( SetFriendlyFire(attacker, victim, damage, damagePosition) )
+		SDKHooks_TakeDamage(victim, attacker, attacker, damage, DMG_BULLET|DMG_SLASH|DMG_DIRECT);
+	else
+		return Plugin_Handled;
+
+	return Plugin_Continue;
+}
+
+bool IsValidClient(int client)
+{
+	if( !client || client > MaxClients )
+		return false;
+
+	return IsClientInGame(client);
+}
+
+/**
+ * Determines if the zombie should be stunned based on rng
+ * 
+ * @param client     Survivor that produced the shot
+ * @param zombie     Infected to test stun
+ * @return           True if should stun, false otherwise
+ */
+bool BlockStun(int client, int zombie)
+{
+	// Get the client weapon
+	char sWeapon[32];
+	if( GetEntProp(client, Prop_Send, "m_usingMountedWeapon") == 1 )
+		sWeapon = "minigun";
+
+	else GetClientWeapon(client, sWeapon, sizeof(sWeapon));
+	// Get the weapon properties using HashMaps
+	int index;
+	if( !g_smWeapons.GetValue(sWeapon, index) )
+		return false;	// Error getting weapon
+	
+	// Get the chance of stunning the infected based on the zombie
+	float chance = GetEntProp(zombie, Prop_Send, "m_zombieClass") == 8 ?
+		g_esWeaponSettings[index].StunTank : g_esWeaponSettings[index].StunSpecial;
+
+	if( chance == 0.0 ) return false;
+
+	return chance >= GetRandomFloat(0.0, 1.0);
+}
+
+/**
+ * Determines if a survivor can receive friendly fire from explosive shots and sets the damage
+ * 
+ * @param client     Client who produced the explosive shot
+ * @param damage     Damage amount to scale
+ * @return           True if apply damage false if damage is 0
+ */
+bool SetFriendlyFire(int client, int victim, float &damage, const float origin[3])
+{
+	// Get the client weapon
+	char sWeapon[32];
+	if( GetEntProp(client, Prop_Send, "m_usingMountedWeapon") == 1 )
+		sWeapon = "minigun";
+
+	else GetClientWeapon(client, sWeapon, sizeof(sWeapon));
+
+	int index;
+	if( !g_smWeapons.GetValue(sWeapon, index) )
+		return false;	// Error getting weapon
+
+	if( g_esWeaponSettings[index].DamageHumans == 0.0 )
+		return false;
+
+	// Get the distance between victim and damage origin
+	float vPos[3], distance;
+	GetClientEyePosition(victim, vPos);
+	vPos[2] -= 12;
+	distance = GetVectorDistance(vPos, origin, false);
+
+	if( g_esWeaponSettings[index].Radius > 0.0 )
+		damage = g_esWeaponSettings[index].DamageHumans - (g_esWeaponSettings[index].DamageHumans / g_esWeaponSettings[index].Radius) * distance;
+
+	else
+		damage = g_esWeaponSettings[index].DamageHumans - (0.4 * g_esWeaponSettings[index].DamageHumans * distance / g_esWeaponSettings[index].DamageZombies);
+	
+	return true;
+}
+
+int Native_SetExplosiveShots(Handle plugin, int numParams)
+{
+	if( !g_bPluginOn )
+		return false;
+
+	if( Mode_Block )
+}
+
+int Native_GetExplosiveShots(Handle plugin, int numParams)
+{
+	if( !g_bPluginOn )
+		return false;
+
+	
+	if( L4D_ExplosiveShots_Get )
 }
