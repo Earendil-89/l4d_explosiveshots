@@ -1,3 +1,28 @@
+/**
+ * ================================================================================ *
+ *                      [L4D & L4D2] Survivor Utilities (API)                       *
+ * -------------------------------------------------------------------------------- *
+ *  Author      :   Eärendil                                                        *
+ *  Descrp      :   Modify survivor speeds and add custom effects.                  *
+ *  Version     :   1.0                                                             *
+ *  Link        :   https://github.com/Earendil-89/l4d_explosiveshots               *
+ * ================================================================================ *
+ *                                                                                  *
+ *  CopyRight (C) 2023 Eduardo "Eärendil" Chueca                                    *
+ * -------------------------------------------------------------------------------- *
+ *  This program is free software; you can redistribute it and/or modify it under   *
+ *  the terms of the GNU General Public License, version 3.0, as published by the   *
+ *  Free Software Foundation.                                                       *
+ *                                                                                  *
+ *  This program is distributed in the hope that it will be useful, but WITHOUT     *
+ *  ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS   *
+ *  FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more          *
+ *  details.                                                                        *
+ *                                                                                  *
+ *  You should have received a copy of the GNU General Public License along with    *
+ *  this program.  If not, see <http://www.gnu.org/licenses/>.                      *
+ * ================================================================================ *
+ */
 #define DEBUG 0
 
 #include <sdkhooks>
@@ -8,10 +33,11 @@
 #if DEBUG
 #include <profiler>
 #endif
+
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "0.1-SNAPSHOT"
+#define PLUGIN_VERSION "1.0"
 #define FCVAR_FLAGS FCVAR_NOTIFY
 
 #define SND_EXPL1 "weapons/flaregun/gunfire/flaregun_explode_1.wav"
@@ -49,8 +75,11 @@ bool g_bL4D2;
 int g_iMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
 bool g_bClientAllow[MAXPLAYERS + 1] = {true, ... };	// Blocks shots of client, used to prevent multiple explosions in 1 shot due to piercing
 
-WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
-
+WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];	// Stores the different settings for each weapon type
+/**
+ * Stores a key and a value, matches the weapon name with the index in the array of WeaponSettings
+ * This is much faster than looping through arrays and comparing each string until you find a match
+ */
 StringMap g_smWeapons;
 
 public Plugin myinfo =
@@ -59,7 +88,7 @@ public Plugin myinfo =
 	author = "Eärendil",
 	description = "Allows weapons to create explosions where bullet impacts.",
 	version = PLUGIN_VERSION,
-	url = "https://github.com//l4d_explosiveshots"
+	url = "https://github.com/Earendil-89/l4d_explosiveshots"
 };
 
 public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max)
@@ -697,3 +726,9 @@ int Native_GetExplosiveShots(Handle plugin, int numParams)
 	return g_iMode[client];
 }
 
+/* ============================================================================================
+ *                                             Changelog
+ * --------------------------------------------------------------------------------------------
+ * 1.0    (28-Mar-2023)
+ *   - Initial release.
+============================================================================================ */
