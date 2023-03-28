@@ -45,7 +45,7 @@ ConVar g_cvCfgFile;
 bool g_bPluginOn;
 bool g_bL4D2;
 
-ExplosiveShotsMode g_esmMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
+int g_iMode[MAXPLAYERS + 1] = { Mode_Auto, ... };	// Stores the shot behaviour
 bool g_bClientAllow[MAXPLAYERS + 1] = {true, ... };	// Blocks shots of client, used to prevent multiple explosions in 1 shot due to piercing
 
 WeaponSettings g_esWeaponSettings[WEAPON_COUNT_L2];
@@ -105,7 +105,7 @@ public void OnConfigsExecuted()
 
 public void OnClientPutInServer(int client)
 {
-	g_esmMode[client] = Mode_Auto;
+	g_iMode[client] = Mode_Auto;
 	g_bClientAllow[client] = true;
 
 	SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
@@ -113,9 +113,13 @@ public void OnClientPutInServer(int client)
 
 public void OnClientDisconnect(int client)
 {
-	g_esmMode[client] = Mode_Auto;
+	g_iMode[client] = Mode_Auto;
 	g_bClientAllow[client] = true;
 }
+
+/* ============================================================================= *
+ *                                   ConVars                                     *
+ * ============================================================================= */
 
 void CVarChange_Enable(ConVar convar, const char[] oldValue, const char[] newValue)
 {
@@ -194,12 +198,10 @@ bool GetGameMode()
 /* ============================================================================= *
  *                                  FileReader                                   *
  * ============================================================================= */
+
 /**
  * Attempts to read the provided config file, if the file is custom and fails to
  * read, it will open the default one.
- * 
- * @param fileName     Relative path of the cfg file
- * @return             true on success false on fail
  */
 bool ReadCfgFile(const char[] fileName)
 {
@@ -352,6 +354,10 @@ bool ReadCfgFile(const char[] fileName)
 	return true;
 }
 
+/* ============================================================================= *
+ *                          Events, SDKHooks & Frames                            *
+ * ============================================================================= */
+
 Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 {
 	// Get owner of the bullet
@@ -367,7 +373,7 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 		return Plugin_Continue;
 
 	// Ignore players blocked
-	if( g_esmMode[client] == Mode_Block )
+	if( g_iMode[client] == Mode_Block )
 		return Plugin_Continue;
 	
 	// Get the weapon name that caused the shot
@@ -391,23 +397,58 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 	}
 	#if DEBUG
 	PrintToServer("%sg_esWeaponSettings[index].Enabled: %b", SERVER_TAG, g_esWeaponSettings[index].Enabled);
-	PrintToServer("%sg_esmMode[client] == Mode_Force: %b", SERVER_TAG, g_esmMode[client] == Mode_Force);
+	PrintToServer("%sg_iMode[client] == Mode_Force: %b", SERVER_TAG, g_iMode[client] == Mode_Force);
 	#endif
 
-	if( g_esWeaponSettings[index].Enabled || g_esmMode[client] == Mode_Force )
+	if( g_esWeaponSettings[index].Enabled || g_iMode[client] == Mode_Force )
 		CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
 
 	return Plugin_Continue;
 }
 
+Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype, int &weapon, float damageForce[3], float damagePosition[3])
+{
+	// Ignore non-explosion damage and dmg caused by weapons
+	if( damagetype != 64 || weapon != -1 )
+		return Plugin_Continue;
+
+	// Ignore damage from entities/wrold or non-survivors
+	if( !IsValidClient(attacker) || GetClientTeam(attacker) != 2 )
+		return Plugin_Continue;
+		
+	if( GetClientTeam(victim) == 3 ) // Zombie vitim of explosive shot
+	{
+		if( BlockStun(attacker, victim) )
+		{
+			damagetype = 0;	// Set Damagetype to generic to stop stunning
+			return Plugin_Changed;
+		}
+		return Plugin_Continue;
+	}
+	// Past this line only other option is a survivor
+	if( SetFriendlyFire(attacker, victim, damage, damagePosition) )
+		SDKHooks_TakeDamage(victim, attacker, attacker, damage, DMG_BULLET|DMG_SLASH|DMG_DIRECT);
+	else
+		return Plugin_Handled;
+
+	return Plugin_Continue;
+}
+
+void AllowShot_Frame(int client)
+{
+	g_bClientAllow[client] = true;
+	#if DEBUG
+	PrintToServer("%sEnabling client %d explosive shots.",SERVER_TAG, client);
+	#endif
+}
+
+/* ============================================================================= *
+ *                                   Functions                                   *
+ * ============================================================================= */
+
 /**
  * Creates an env_explosion to destroy objects, push physics and hurt/knock players and zombies
- * 
- * @param client     Client who will cause the explosion
- * @param vPos       Origin of the explosion
- * @param dmg        Max damage of the explosion
- * @param radius     Max radius of the explosion
- * @noreturn
+ * It doesn't hurt survivors, only zombies/entities, so it will need to be fixed later
  */
 void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
 {
@@ -451,42 +492,6 @@ void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
 	}
 }
 
-void AllowShot_Frame(int client)
-{
-	g_bClientAllow[client] = true;
-	#if DEBUG
-	PrintToServer("%sEnabling client %d explosive shots.",SERVER_TAG, client);
-	#endif
-}
-
-Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, int &damagetype, int &weapon, float damageForce[3], float damagePosition[3])
-{
-	// Ignore non-explosion damage and dmg caused by weapons
-	if( damagetype != 64 || weapon != -1 )
-		return Plugin_Continue;
-
-	// Ignore damage from entities/wrold or non-survivors
-	if( !IsValidClient(attacker) || GetClientTeam(attacker) != 2 )
-		return Plugin_Continue;
-		
-	if( GetClientTeam(victim) == 3 ) // Zombie vitim of explosive shot
-	{
-		if( BlockStun(attacker, victim) )
-		{
-			damagetype = 0;	// Set Damagetype to generic to stop stunning
-			return Plugin_Changed;
-		}
-		return Plugin_Continue;
-	}
-	// Past this line only other option is a survivor
-	if( SetFriendlyFire(attacker, victim, damage, damagePosition) )
-		SDKHooks_TakeDamage(victim, attacker, attacker, damage, DMG_BULLET|DMG_SLASH|DMG_DIRECT);
-	else
-		return Plugin_Handled;
-
-	return Plugin_Continue;
-}
-
 bool IsValidClient(int client)
 {
 	if( !client || client > MaxClients )
@@ -496,11 +501,9 @@ bool IsValidClient(int client)
 }
 
 /**
- * Determines if the zombie should be stunned based on rng
- * 
- * @param client     Survivor that produced the shot
- * @param zombie     Infected to test stun
- * @return           True if should stun, false otherwise
+ * Determines if the zombie should be stunned
+ * Gets the weapon info of the player and then decides based on a random number
+ * if should be stunned or not
  */
 bool BlockStun(int client, int zombie)
 {
@@ -526,10 +529,7 @@ bool BlockStun(int client, int zombie)
 
 /**
  * Determines if a survivor can receive friendly fire from explosive shots and sets the damage
- * 
- * @param client     Client who produced the explosive shot
- * @param damage     Damage amount to scale
- * @return           True if apply damage false if damage is 0
+ * If no ff should be applied, then returns false
  */
 bool SetFriendlyFire(int client, int victim, float &damage, const float origin[3])
 {
@@ -544,7 +544,7 @@ bool SetFriendlyFire(int client, int victim, float &damage, const float origin[3
 	if( !g_smWeapons.GetValue(sWeapon, index) )
 		return false;	// Error getting weapon
 
-	if( g_esWeaponSettings[index].DamageHumans == 0.0 )
+	if( g_esWeaponSettings[index].DamageHumans <= 0.0 )
 		return false;
 
 	// Get the distance between victim and damage origin
@@ -559,22 +559,72 @@ bool SetFriendlyFire(int client, int victim, float &damage, const float origin[3
 	else
 		damage = g_esWeaponSettings[index].DamageHumans - (0.4 * g_esWeaponSettings[index].DamageHumans * distance / g_esWeaponSettings[index].DamageZombies);
 	
+	// Sometimes low amount of damages will be produced, for instance if dmg is 0.9 survivor won't be hurt
+	// So round to top or bottom with a chance depending how the fractional part is close to 0 or 1
+	int integerPart = RoundToFloor(damage);
+	float decimalPart = damage - integerPart;
+	
+	if( decimalPart <= 0.0 ) // Do nothing
+		return true;
+
+	if( decimalPart >= GetRandomFloat(0.0, 1.0) )
+		damage += 1;
+
 	return true;
 }
+
+/* ============================================================================= *
+ *                                   Natives                                     *
+ * ============================================================================= */
 
 int Native_SetExplosiveShots(Handle plugin, int numParams)
 {
 	if( !g_bPluginOn )
 		return false;
 
-	if( Mode_Block )
+	int client = GetNativeCell(1);
+	int mode = GetNativeCell(2);
+
+	if( !client || client > MaxClients )
+		ThrowNativeError(SP_ERROR_INDEX, "Client index %d is invalid.", client);
+
+	if( !IsClientInGame(client) )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is not in game.", client);
+
+	if( GetClientTeam(client) != 2 )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is not survivor.", client);
+
+	if( !IsPlayerAlive(client) )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is dead.", client);
+	
+	if( mode >= Mode_Block || mode <= Mode_Force )
+	{
+		g_iMode[client] = mode;
+		return true;
+	}
+	else 
+		ThrowNativeError(SP_ERROR_PARAM, "Invalid mode provided.");
+	
+	return false;
 }
 
 int Native_GetExplosiveShots(Handle plugin, int numParams)
 {
 	if( !g_bPluginOn )
-		return false;
+		return Mode_Disabled;
 
-	
-	if( L4D_ExplosiveShots_Get )
+	int client = GetNativeCell(1);
+	if( !client || client > MaxClients )
+		ThrowNativeError(SP_ERROR_INDEX, "Client index %d is invalid.", client);
+
+	if( !IsClientInGame(client) )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is not in game.", client);
+
+	if( GetClientTeam(client) != 2 )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is not survivor.", client);
+
+	if( !IsPlayerAlive(client) )
+		ThrowNativeError(SP_ERROR_PARAM, "Client %d is dead.", client);
+
+	return g_iMode[client];
 }
