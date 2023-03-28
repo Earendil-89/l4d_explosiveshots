@@ -86,7 +86,7 @@ public Plugin myinfo =
 {
 	name = "[L4D & L4D2] Explosive Shots",
 	author = "Eärendil",
-	description = "When bullets impact they can create an explosion.",
+	description = "Allows bullets to make explosions where they impact.",
 	version = PLUGIN_VERSION,
 	url = "https://github.com/Earendil-89/l4d_explosiveshots"
 };
