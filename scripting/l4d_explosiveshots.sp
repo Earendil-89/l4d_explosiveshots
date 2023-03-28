@@ -122,6 +122,8 @@ public void OnPluginStart()
 	g_cvGameModes.AddChangeHook(CVarChange_Enable);
 	g_cvCurrGameMode.AddChangeHook(CVarChange_Enable);
 	g_cvCfgFile.AddChangeHook(CVarChange_Config);
+
+	AutoExecConfig(true, "l4d_expshots");
 }
 
 
