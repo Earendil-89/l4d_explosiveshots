@@ -110,7 +110,7 @@ public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max
 
 public void OnPluginStart()
 {
-	CreateConVar("l4d_explosiveshots_version", PLUGIN_VERSION, "Plugin version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
+	CreateConVar("l4d_expshots_version", PLUGIN_VERSION, "Plugin version", FCVAR_NOTIFY|FCVAR_DONTRECORD);
 
 	g_cvAllow = CreateConVar("l4d_expshots_enable", "1", "0 = Plugin off. 1 = Plugin on.", FCVAR_FLAGS, true, 0.0, true, 1.0);
 	g_cvGameModes = CreateConVar("l4d_expshots_gamemodes", "","Enable the plugin in these gamemodes, separated by spaces. (Empty = all).", FCVAR_FLAGS);
