@@ -29,7 +29,6 @@
 #include <sdktools>
 #include <sourcemod>
 #include <l4d_explosiveshots>
-#include <survivorutilities>
 #if DEBUG
 #include <profiler>
 #endif
