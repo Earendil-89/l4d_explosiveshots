@@ -24,7 +24,7 @@
 #define WEAPON_COUNT_L2 18
 #define WEAPON_COUNT_L1 7
 
-static char g_sExplosionProps[][] = { "dmg", "friend_dmg", "radius", "stun_special", "stun_witch", "stun_tank", "enabled" };
+static char g_sExplosionProps[][] = { "dmg_zombies", "dmg_humans", "radius", "stun_special", "stun_witch", "stun_tank", "exp_chance", "enabled" };
 
 enum struct WeaponSettings
 {
@@ -34,6 +34,7 @@ enum struct WeaponSettings
 	float StunSpecial;
 	float StunWitch;
 	float StunTank;
+	float Chance;
 	bool Enabled;
 }
 
@@ -111,6 +112,12 @@ public void OnClientPutInServer(int client)
 	SDKHook(client, SDKHook_OnTakeDamage, OnTakeDamage);
 }
 
+public void OnEntityCreated(int entity, const char[] classname)
+{
+	if( strncmp(classname, "witch", 5) == 0 )
+		SDKHook(entity, SDKHook_OnTakeDamage, OnTakeDamage_Witch);
+}
+
 public void OnClientDisconnect(int client)
 {
 	g_iMode[client] = Mode_Auto;
@@ -138,23 +145,33 @@ void SwitchPlugin()
 	{
 		g_bPluginOn = true;
 		HookEvent("bullet_impact", Event_Bullet_Impact);
+		HookEvent("player_death", Event_Player_Death);
 
 		for( int i = 1; i <= MaxClients; i++ )
 		{
 			if( IsClientInGame(i) )
 				SDKHook(i, SDKHook_OnTakeDamage, OnTakeDamage);
 		}
+
+		int witch;
+		while( (witch = FindEntityByClassname(witch, "witch")) != -1 )
+			SDKHook(witch, SDKHook_OnTakeDamage, OnTakeDamage_Witch);
 	}
 	if( g_bPluginOn && (!bAllow || !GetGameMode()) )
 	{
 		g_bPluginOn = false;
 		UnhookEvent("bullet_impact", Event_Bullet_Impact);
+		UnhookEvent("player_death", Event_Player_Death);
 
 		for( int i = 1; i <= MaxClients; i++ )
 		{
 			if( IsClientInGame(i) )
 				SDKUnhook(i, SDKHook_OnTakeDamage, OnTakeDamage);
 		}
+
+		int witch = -1;
+		while( (witch = FindEntityByClassname(witch, "witch")) != -1 )
+			SDKHook(witch, SDKHook_OnTakeDamage, OnTakeDamage_Witch);
 	}
 }
 
@@ -303,7 +320,8 @@ bool ReadCfgFile(const char[] fileName)
 				case 3: g_esWeaponSettings[count].StunSpecial = hKV.GetFloat(NULL_STRING);
 				case 4: g_esWeaponSettings[count].StunWitch = hKV.GetFloat(NULL_STRING);
 				case 5: g_esWeaponSettings[count].StunTank = hKV.GetFloat(NULL_STRING);
-				case 6: g_esWeaponSettings[count].Enabled = hKV.GetNum(NULL_STRING) == 1;
+				case 6: g_esWeaponSettings[count].Chance = hKV.GetFloat(NULL_STRING);
+				case 7: g_esWeaponSettings[count].Enabled = hKV.GetNum(NULL_STRING) == 1;
 			}
 
 			hKV.GoBack();
@@ -315,6 +333,7 @@ bool ReadCfgFile(const char[] fileName)
 		PrintToServer("g_esWeaponSettings[%d].StunSpecial =  %.4f", count, g_esWeaponSettings[count].StunSpecial);
 		PrintToServer("g_esWeaponSettings[%d].StunWitch =  %.4f", count, g_esWeaponSettings[count].StunWitch);
 		PrintToServer("g_esWeaponSettings[%d].StunTank =  %.4f", count, g_esWeaponSettings[count].StunTank);
+		PrintToServer("g_esWeaponSettings[%d].Chance = %.4f", count, g_esWeaponSettings[count].Chance);
 		PrintToServer("g_esWeaponSettings[%d].Enabled =  %b", count, g_esWeaponSettings[count].Enabled);
 		#endif
 		count++;
@@ -400,9 +419,18 @@ Action Event_Bullet_Impact(Event event, const char[] name, bool dontBroadcast)
 	PrintToServer("%sg_iMode[client] == Mode_Force: %b", SERVER_TAG, g_iMode[client] == Mode_Force);
 	#endif
 
-	if( g_esWeaponSettings[index].Enabled || g_iMode[client] == Mode_Force )
+	if( (g_esWeaponSettings[index].Enabled || g_iMode[client] == Mode_Force) && ShouldCreateExplosion(g_esWeaponSettings[index].Chance) )
 		CreateExplosion(client, vPos, g_esWeaponSettings[index].DamageZombies, g_esWeaponSettings[index].Radius);
 
+	return Plugin_Continue;
+}
+
+Action Event_Player_Death(Event event, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(event.GetInt("userid"));
+	if( !client ) return Plugin_Continue; // Ignore zombies
+
+	g_iMode[client] = Mode_Auto;
 	return Plugin_Continue;
 }
 
@@ -431,6 +459,22 @@ Action OnTakeDamage(int victim, int &attacker, int &inflictor, float &damage, in
 	else
 		return Plugin_Handled;
 
+	return Plugin_Continue;
+}
+
+Action OnTakeDamage_Witch(int victim, int &attacker, int &inflictor, float &damage, int &damagetype, int &weapon, float damageForce[3], float damagePosition[3])
+{
+	if( damagetype != 64 || weapon != -1 )
+		return Plugin_Continue;
+
+	if( !IsValidClient(attacker) || GetClientTeam(attacker) != 2 )
+		return Plugin_Continue;
+
+	if( BlockStun(attacker, victim, true) )
+	{
+		damagetype = 0;	// Set Damagetype to generic to stop stunning
+		return Plugin_Changed;
+	}
 	return Plugin_Continue;
 }
 
@@ -492,20 +536,12 @@ void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
 	}
 }
 
-bool IsValidClient(int client)
-{
-	if( !client || client > MaxClients )
-		return false;
-
-	return IsClientInGame(client);
-}
-
 /**
  * Determines if the zombie should be stunned
  * Gets the weapon info of the player and then decides based on a random number
  * if should be stunned or not
  */
-bool BlockStun(int client, int zombie)
+bool BlockStun(int client, int zombie, bool isWitch = false)
 {
 	// Get the client weapon
 	char sWeapon[32];
@@ -519,14 +555,23 @@ bool BlockStun(int client, int zombie)
 		return false;	// Error getting weapon
 	
 	// Get the chance of stunning the infected based on the zombie
-	float chance = GetEntProp(zombie, Prop_Send, "m_zombieClass") == 8 ?
+	float chance;
+	if( isWitch ) chance = g_esWeaponSettings[index].StunWitch;
+	else chance = GetEntProp(zombie, Prop_Send, "m_zombieClass") == 8 ?
 		g_esWeaponSettings[index].StunTank : g_esWeaponSettings[index].StunSpecial;
 
-	if( chance == 0.0 ) return false;
+	if( chance <= 0.0 ) return false;
 
 	return chance >= GetRandomFloat(0.0, 1.0);
 }
 
+bool ShouldCreateExplosion(float chance)
+{
+	if( chance <= 0.0 ) {
+		return false;
+	}
+	return chance >= GetRandomFloat(0.0, 1.0);
+}
 /**
  * Determines if a survivor can receive friendly fire from explosive shots and sets the damage
  * If no ff should be applied, then returns false
@@ -571,6 +616,14 @@ bool SetFriendlyFire(int client, int victim, float &damage, const float origin[3
 		damage += 1;
 
 	return true;
+}
+
+bool IsValidClient(int client)
+{
+	if( !client || client > MaxClients )
+		return false;
+
+	return IsClientInGame(client);
 }
 
 /* ============================================================================= *
