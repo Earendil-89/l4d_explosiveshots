@@ -3,6 +3,3 @@
 
 #ignore vscode
 /.vscode
-
-#ignore changelog
-CHANGELOG.md
