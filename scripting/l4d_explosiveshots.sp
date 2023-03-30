@@ -4,7 +4,7 @@
  * -------------------------------------------------------------------------------- *
  *  Author      :   Eärendil                                                        *
  *  Descrp      :   Modify survivor speeds and add custom effects.                  *
- *  Version     :   1.0                                                             *
+ *  Version     :   1.0.1                                                           *
  *  Link        :   https://github.com/Earendil-89/l4d_explosiveshots               *
  * ================================================================================ *
  *                                                                                  *
@@ -36,12 +36,15 @@
 #pragma newdecls required
 #pragma semicolon 1
 
-#define PLUGIN_VERSION "1.0"
+#define PLUGIN_VERSION "1.0.1"
 #define FCVAR_FLAGS FCVAR_NOTIFY
 
 #define SND_EXPL1 "weapons/flaregun/gunfire/flaregun_explode_1.wav"
 #define SND_EXPL2 "weapons/flaregun/gunfire/flaregun_fire_1.wav"
 #define SND_EXPL3 "animation/plane_engine_explode.wav"
+#define SND_EXPL4 "player/boomer/explode/explo_medium_09.wav"	// Boomer explosion sound for L4D
+#define SND_EXPL5 "player/boomer/explode/explo_medium_10.wav"
+#define SND_EXPL6 "player/boomer/explode/explo_medium_14.wav"
 
 #define SERVER_TAG "[ExplosiveShots] "
 #define DEFAULT_CFG "data/l4d_explosiveshots.cfg"
@@ -124,13 +127,18 @@ public void OnPluginStart()
 	g_cvCfgFile.AddChangeHook(CVarChange_Config);
 
 	AutoExecConfig(true, "l4d_expshots");
+	PrecacheAllSounds();
 }
-
 
 public void OnConfigsExecuted()
 {
 	SwitchPlugin();
 	LoadConfig();
+}
+
+public void OnMapStart()
+{
+	PrecacheAllSounds();
 }
 
 public void OnClientPutInServer(int client)
@@ -574,9 +582,9 @@ void CreateExplosion(int client, const float vPos[3], float dmg, float radius)
 	// Play an explosion sound
 	switch( GetRandomInt(1,3) )
 	{
-		case 1: EmitAmbientSound(SND_EXPL1, vPos);
-		case 2: EmitAmbientSound(SND_EXPL2, vPos);
-		case 3: EmitAmbientSound(SND_EXPL2, vPos);
+		case 1: EmitAmbientSound(g_bL4D2 ? SND_EXPL1 : SND_EXPL4, vPos);
+		case 2: EmitAmbientSound(g_bL4D2 ? SND_EXPL2 : SND_EXPL5, vPos);
+		case 3: EmitAmbientSound(g_bL4D2 ? SND_EXPL2 : SND_EXPL6, vPos);
 	}
 }
 
@@ -670,6 +678,22 @@ bool IsValidClient(int client)
 	return IsClientInGame(client);
 }
 
+void PrecacheAllSounds()
+{
+	if( g_bL4D2 )
+	{
+		PrecacheSound(SND_EXPL1);
+		PrecacheSound(SND_EXPL2);
+		PrecacheSound(SND_EXPL3);
+	}
+	else
+	{
+		PrecacheSound(SND_EXPL4);
+		PrecacheSound(SND_EXPL5);
+		PrecacheSound(SND_EXPL6);		
+	}
+}
+
 /* ============================================================================= *
  *                                   Natives                                     *
  * ============================================================================= */
@@ -730,6 +754,9 @@ int Native_GetExplosiveShots(Handle plugin, int numParams)
 /* ============================================================================================
  *                                             Changelog
  * --------------------------------------------------------------------------------------------
+ * 1.0.1  (30-Mar-2023)
+ *   - Added valid sounds for L4D Series.
+ *   - Added sound precaching.
  * 1.0    (28-Mar-2023)
  *   - Initial release.
 ============================================================================================ */
