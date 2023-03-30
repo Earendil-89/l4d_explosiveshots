@@ -1,9 +1,12 @@
 ## Release Notes
 
-## [1.0.0]
+## Version 1.0.1 (30-March-2023)
 
 ### Added
+ - Added valid sounds for L4D Series.
+ - Added sound precaching.
+  
 
-### Fixed
+## Version 1.0 (28-March-2023)
 
-### Removed
+ - First release.
