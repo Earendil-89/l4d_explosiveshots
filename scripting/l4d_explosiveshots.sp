@@ -278,9 +278,11 @@ bool ReadCfgFile(const char[] fileName)
 		if( !bDefault )
 		{
 			PrintToServer("%sWarning: Can't read \"%s\", attempting default file.", SERVER_TAG, fileName);
+			delete hKV;
 			return ReadCfgFile(DEFAULT_CFG);		
 		}
 		PrintToServer("%sError: Can't read default config file, plugin disabled.", SERVER_TAG);
+		delete hKV;
 		return false;	
 	}
 	
@@ -300,6 +302,7 @@ bool ReadCfgFile(const char[] fileName)
 		if( !bDefault )
 		{
 			PrintToServer("%sWarning: Can't read \"%s\", attempting default file.", SERVER_TAG, fileName);
+			delete hKV;
 			return ReadCfgFile(DEFAULT_CFG);		
 		}
 		PrintToServer("%sError: Can't read default config file, plugin disabled.", SERVER_TAG);
@@ -307,6 +310,8 @@ bool ReadCfgFile(const char[] fileName)
 		#if DEBUG
 		delete pro;
 		#endif
+
+		delete hKV;
 		return false;
 	}
 	hKV.GotoFirstSubKey();
@@ -339,6 +344,7 @@ bool ReadCfgFile(const char[] fileName)
 				if( !bDefault )
 				{
 					PrintToServer("%Warning: Failed to read \"%s\" value from \"%s\". Reading default file.", SERVER_TAG, g_sExplosionProps[i], sName);
+					delete hKV;
 					return ReadCfgFile(DEFAULT_CFG); 
 				}
 				PrintToServer("%sError: Failed to read \"%s\" value from \"%s\". Plugin disabled.", SERVER_TAG, g_sExplosionProps[i], sName); 
@@ -379,6 +385,7 @@ bool ReadCfgFile(const char[] fileName)
 		if( !bDefault )
 		{
 			PrintToServer("%sWarning: incorrect amount of weapon settigns provided. Opening default file.", SERVER_TAG);
+			delete hKV;
 			return ReadCfgFile(DEFAULT_CFG);
 		}
 		PrintToServer("%Error: incorrect amount of weapon settigns provided in default file. Plugin disabled.", SERVER_TAG);
