@@ -4,5 +4,5 @@
 #ignore vscode
 /.vscode
 
-#ignore changelog
-CHANGELOG.md
+#ignore compiled file
+/.plugins
